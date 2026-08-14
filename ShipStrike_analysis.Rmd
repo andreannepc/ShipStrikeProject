@@ -1,0 +1,3454 @@
+---
+title: "ShipStrikeproject"
+author: "Andreanne Paul-Chowdhury"
+date: "2026-07-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data provenance
+
+The dataset `Cetacean_shipstrikes_2010Summary.xlsx` was supplied through a
+previous university class. Information identifying the original data provider,
+sampling design and database documentation was not provided.
+
+The dataset is therefore treated as a historical record-level dataset, and the
+analysis does not assume that it represents all cetacean ship strikes or an
+unbiased sample of global incidents.
+
+
+# Introduction
+
+Ship strikes are recognised as a significant threat to marine mammals worldwide. This project investigates patterns in documented cetacean ship strike incidents to identify species most vulnerable to collisions and examine how vessel type and location influence strike severity.
+
+The workflow follows a reproducible data science pipeline consisting of:
+
+- Data import
+- Data inspection
+- Data cleaning
+- Feature engineering
+- Exploratory analysis
+- Visualisation
+- Interpretation
+
+```{r setup, message = FALSE, warning = FALSE}
+
+# Load required packages
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(skimr)
+library(lubridate)
+library(naniar)
+library(here)
+
+```
+
+```{r}
+# Import the Excel dataset
+ship_strikes <- read_excel(
+  here("data", "Cetacean_shipstrikes_2010Summary.xlsx")
+)
+
+head(ship_strikes)
+
+```
+
+
+```{r}
+#Cleaning column names
+ship_strikes <- ship_strikes %>%
+  clean_names()
+names(ship_strikes)
+
+```
+
+```{r}
+#Inspect structure of the dataset
+glimpse(ship_strikes)
+
+nrow(ship_strikes) #538 observations
+
+ncol(ship_strikes) # 12 variables
+
+sapply(ship_strikes, class)
+
+summary(ship_strikes)
+
+skim(ship_strikes)
+
+ship_strikes %>%
+    summarise(across(everything(),
+                     ~sum(is.na(.))))
+vis_miss(ship_strikes)
+```
+
+```{r}
+#looking for duplicates
+sum(duplicated(ship_strikes)) #No duplicates
+```
+
+```{r}
+#Count unique values
+#Species
+ship_strikes %>%
+    count(scientific_name,
+          sort = TRUE)
+# Vessel type
+ship_strikes %>%
+    count(vessel_type,
+          sort = TRUE)
+#Strike outcome
+ship_strikes %>%
+    count(strike_result, 
+          sort = TRUE)
+```
+
+```{r}
+#Check the date range
+range(ship_strikes$evidence_date,
+      na.rm = TRUE)
+```
+
+```{r}
+#Frequency table
+# Species
+ship_strikes %>%
+  count(scientific_name, sort = TRUE)
+
+# Common names
+ship_strikes %>%
+  count(common_name, sort = TRUE)
+
+# Vessel types
+ship_strikes %>%
+  count(vessel_type, sort = TRUE)
+
+# Strike outcomes
+ship_strikes %>%
+  count(strike_result, sort = TRUE)
+
+# Evidence quality
+ship_strikes %>%
+  count(id_quality, sort = TRUE)
+
+# Ocean regions
+ship_strikes %>%
+  count(large_area, sort = TRUE)
+```
+
+## Data Quality Assessment
+
+Prior to analysis, the dataset was assessed to understand its structure, identify missing values, verify variable types, and detect potential data quality issues. This step ensured that subsequent analyses were based on reliable and appropriately formatted data.
+
+Initial inspection showed the dataset contained 538 observations across 12 variables. Most variables were categorical, with one variable (`evidence_date`) stored as a date. Missing values were concentrated in descriptive fields such as `evidence_date_descriptive`, `collision_evidence`, and `strike_result`, while spatial variables (`large_area` and `small_area`) and `evidence_type` were largely complete. These observations informed the data-cleaning strategy used in the next phase.
+
+
+# Phase 2: Data Cleaning and Feature Engineering
+
+The purpose of this phase was to standardise inconsistent categories, retain
+missing-data information, create variables directly relevant to the research
+question, and establish transparent inclusion rules for later analyses.
+
+The original data were preserved unchanged. A separate cleaned dataset was
+created so that every transformation remained traceable and reproducible.
+
+The cleaning workflow addressed:
+
+1. character formatting and inconsistent labels;
+2. species-identification status;
+3. identification confidence;
+4. strike-outcome severity;
+5. vessel-type categories;
+6. ocean-basin categories;
+7. temporal precision;
+8. analysis-specific inclusion flags.
+
+
+```{r}
+# Preserve the imported dataset
+ship_strikes_raw <- ship_strikes
+
+# Confirm that the original dataset has the expected dimensions
+stopifnot(
+  nrow(ship_strikes_raw) == 538,
+  ncol(ship_strikes_raw) == 12
+)
+
+glimpse(ship_strikes_raw)
+```
+
+```{r}
+# Standardise detailed vessel labels
+normalise_vessel_type <- function(x) {
+
+  x_clean <- stringr::str_squish(x)
+  x_lower <- stringr::str_to_lower(x_clean)
+
+  dplyr::case_when(
+
+    # Missing or explicitly unknown vessels
+    is.na(x_clean) |
+      x_lower %in% c("not known", "unknown") ~
+      "Unknown",
+
+    # Correct three variants of whale-watching vessel
+    stringr::str_detect(
+      x_lower,
+      "whal.*w[h]?atch"
+    ) ~
+      "Whale-watching vessel",
+
+    # Correct spelling variants for unknown-sized motor yachts
+    stringr::str_detect(
+      x_lower,
+      "motor yacht.*unk"
+    ) ~
+      "Motor yacht (unknown size)",
+
+    # Correct inflatable-vessel spelling error
+    stringr::str_detect(
+      x_lower,
+      "^rigid"
+    ) ~
+      "Rigid inflatable/inflatable",
+
+    # Combine Coast Guard spelling and punctuation variants
+    stringr::str_detect(
+      x_lower,
+      "coast guard"
+    ) ~
+      "US Coast Guard vessel",
+
+    # Standardise case differences
+    x_lower == "general cargo" ~ "General cargo",
+    x_lower == "oil tanker" ~ "Oil tanker",
+    x_lower == "research vessel" ~ "Research vessel",
+    x_lower == "cruise ship" ~ "Cruise ship",
+    x_lower == "high-speed ferry" ~ "High-speed ferry",
+
+    # Remove spacing difference in gross-tonnage description
+    stringr::str_detect(
+      x_lower,
+      "fishing vessel.*300grt"
+    ) ~
+      "Fishing vessel (<300 GRT)",
+
+    # Retain any label not addressed above
+    TRUE ~ x_clean
+  )
+}
+```
+
+```{r}
+# Group detailed vessel descriptions into analytical categories
+classify_vessel_type <- function(x) {
+
+  x_lower <- stringr::str_to_lower(x)
+
+  dplyr::case_when(
+
+    x_lower == "unknown" ~
+      "Unknown",
+
+    stringr::str_detect(
+      x_lower,
+      "naval|submarine|coast guard"
+    ) ~
+      "Government or naval",
+
+    stringr::str_detect(
+      x_lower,
+      "whale-watching|research vessel"
+    ) ~
+      "Research or whale-watching",
+
+    stringr::str_detect(
+      x_lower,
+      "ferry|passenger|cruise|hydrofoil"
+    ) ~
+      "Passenger or ferry",
+
+    stringr::str_detect(
+      x_lower,
+      "container|cargo|freighter|oil tanker"
+    ) ~
+      "Cargo or tanker",
+
+    stringr::str_detect(
+      x_lower,
+      "fishing|whale catcher"
+    ) ~
+      "Fishing or whaling",
+
+    stringr::str_detect(
+      x_lower,
+      paste(
+        "motor yacht",
+        "sailing yacht",
+        "sailing vessel",
+        "dinghy",
+        "rigid inflatable",
+        sep = "|"
+      )
+    ) ~
+      "Recreational or small craft",
+
+    stringr::str_detect(
+      x_lower,
+      "hopper dredge|pilot boat|other"
+    ) ~
+      "Other or industrial",
+
+    TRUE ~
+      "Other or industrial"
+  )
+}
+```
+
+```{r}
+# Clean the dataset
+ship_strikes_clean <- ship_strikes_raw |>
+  mutate(
+    across(
+      where(is.character),
+      ~ na_if(str_squish(.x), "")
+    ),
+    record_id = row_number(),
+    .before = 1
+  )
+
+glimpse(ship_strikes_clean)
+```
+```{r}
+#Clean species information 
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    # Correct a spelling error without changing the taxonomic meaning
+    scientific_name_clean = case_when(
+      scientific_name == "Unidentified baleanopterid whale" ~
+        "Unidentified balaenopterid whale",
+
+      TRUE ~ scientific_name
+    ),
+
+    # Describe the taxonomic resolution of each record
+    species_status = case_when(
+
+      is.na(scientific_name_clean) ~
+        "Missing scientific name",
+
+      str_detect(
+        str_to_lower(scientific_name_clean),
+        "^unidentified"
+      ) ~
+        "Unidentified cetacean",
+
+      scientific_name_clean == "B.m. brevicauda" ~
+        "Unresolved abbreviation",
+
+      TRUE ~
+        "Identified to species"
+    ),
+
+    # Name used specifically for species-level analysis
+    species_analysis_name = case_when(
+
+      # This record identifies the species but not the subspecies
+      scientific_name_clean ==
+        "Balaenoptera acutorostrata ssp." ~
+        "Balaenoptera acutorostrata",
+
+      species_status == "Identified to species" ~
+        scientific_name_clean,
+
+      TRUE ~
+        NA_character_
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    species_status,
+    sort = TRUE,
+    name = "number_of_records"
+  ) |>
+  mutate(
+    percentage = round(
+      100 * number_of_records / sum(number_of_records),
+      1
+    )
+  )
+```
+
+```{r}
+#Clean identification quality 
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    id_quality_clean = case_when(
+
+      is.na(id_quality) ~
+        "Missing",
+
+      str_detect(
+        str_to_lower(id_quality),
+        "^tentative"
+      ) ~
+        "Tentative",
+
+      TRUE ~ id_quality
+    ),
+
+    analysis_confidence = case_when(
+
+      id_quality_clean == "Confirmed" ~
+        "Confirmed identification",
+
+      TRUE ~
+        "Not confirmed or missing"
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    id_quality_clean,
+    sort = TRUE,
+    name = "number_of_records"
+  )
+```
+
+```{r}
+#Clean evidence type 
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    evidence_type_clean = case_when(
+
+      str_to_lower(evidence_type) == "collision" ~
+        "Collision",
+
+      str_to_lower(evidence_type) == "shore" ~
+        "Shore",
+
+      str_to_lower(evidence_type) == "at sea" ~
+        "At sea",
+
+      str_to_lower(evidence_type) == "found on shore" ~
+        "Found on shore",
+
+      str_to_lower(evidence_type) == "found at sea" ~
+        "Found at sea",
+
+      str_to_lower(evidence_type) == "stuck on bow" ~
+        "Stuck on bow",
+
+      TRUE ~
+        "Other"
+    ),
+
+    evidence_context = case_when(
+
+      evidence_type_clean == "Collision" ~
+        "Reported collision",
+
+      evidence_type_clean %in%
+        c("At sea", "Found at sea", "Stuck on bow") ~
+        "At-sea evidence",
+
+      evidence_type_clean %in%
+        c("Shore", "Found on shore") ~
+        "Shore-based evidence",
+
+      TRUE ~
+        "Other evidence"
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    evidence_type,
+    evidence_type_clean,
+    evidence_context,
+    sort = TRUE
+  )
+```
+
+```{r}
+#Clean and classify strike outcome
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    strike_result_clean = case_when(
+
+      is.na(strike_result) |
+        str_to_lower(strike_result) == "not known" ~
+        "Unknown",
+
+      str_to_lower(strike_result) == "death" ~
+        "Death",
+
+      str_detect(
+        str_to_lower(strike_result),
+        "severe external visible injury"
+      ) ~
+        "Severe injury",
+
+      str_detect(
+        str_to_lower(strike_result),
+        "indeterminate visible injury"
+      ) ~
+        "Indeterminate injury",
+
+      str_detect(
+        str_to_lower(strike_result),
+        "apparently minor external injury"
+      ) ~
+        "Minor injury",
+
+      TRUE ~
+        "Other"
+    ),
+
+    # Identifies records suitable for outcome analysis
+    outcome_known = strike_result_clean != "Unknown",
+
+    # Binary response for fatality-proportion calculations
+    fatal_outcome = case_when(
+      strike_result_clean == "Death" ~ 1L,
+      outcome_known ~ 0L,
+      TRUE ~ NA_integer_
+    ),
+
+    fatal_label = case_when(
+      fatal_outcome == 1L ~ "Fatal",
+      fatal_outcome == 0L ~ "Non-fatal known outcome",
+      TRUE ~ "Unknown outcome"
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    strike_result_clean,
+    sort = TRUE,
+    name = "number_of_records"
+  ) |>
+  mutate(
+    percentage = round(
+      100 * number_of_records / sum(number_of_records),
+      1
+    )
+  )
+```
+
+```{r}
+# Clean and group vessel type
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    vessel_type_clean =
+      normalise_vessel_type(vessel_type),
+
+    vessel_category =
+      classify_vessel_type(vessel_type_clean),
+
+    vessel_category = factor(
+      vessel_category,
+      levels = c(
+        "Cargo or tanker",
+        "Passenger or ferry",
+        "Fishing or whaling",
+        "Recreational or small craft",
+        "Government or naval",
+        "Research or whale-watching",
+        "Other or industrial",
+        "Unknown"
+      )
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    vessel_category,
+    sort = TRUE,
+    name = "number_of_records"
+  ) |>
+  mutate(
+    percentage = round(
+      100 * number_of_records / sum(number_of_records),
+      1
+    )
+  )
+
+vessel_crosswalk <- ship_strikes_clean |>
+  count(
+    vessel_type,
+    vessel_type_clean,
+    vessel_category,
+    sort = TRUE,
+    name = "number_of_records"
+  )
+
+vessel_crosswalk
+```
+
+```{r}
+#Create ocean-basin categories
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    large_area_clean = coalesce(
+      large_area,
+      "Unknown"
+    ),
+
+    ocean_basin = case_when(
+
+      str_starts(
+        large_area_clean,
+        "Atlantic"
+      ) ~
+        "Atlantic Ocean",
+
+      str_starts(
+        large_area_clean,
+        "Pacific"
+      ) ~
+        "Pacific Ocean",
+
+      str_starts(
+        large_area_clean,
+        "Indian"
+      ) ~
+        "Indian Ocean",
+
+      str_starts(
+        large_area_clean,
+        "Arctic"
+      ) ~
+        "Arctic Ocean",
+
+      str_starts(
+        large_area_clean,
+        "Southern"
+      ) ~
+        "Southern Ocean",
+
+      TRUE ~
+        "Unknown"
+    ),
+
+    ocean_basin = factor(
+      ocean_basin,
+      levels = c(
+        "Atlantic Ocean",
+        "Pacific Ocean",
+        "Indian Ocean",
+        "Southern Ocean",
+        "Arctic Ocean",
+        "Unknown"
+      )
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean |>
+  count(
+    ocean_basin,
+    sort = TRUE,
+    name = "number_of_records"
+  ) |>
+  mutate(
+    percentage = round(
+      100 * number_of_records / sum(number_of_records),
+      1
+    )
+  )
+
+region_crosswalk <- ship_strikes_clean |>
+  count(
+    large_area_clean,
+    ocean_basin,
+    sort = TRUE,
+    name = "number_of_records"
+  )
+
+region_crosswalk
+```
+
+```{r}
+# ---------------------------------------------------------
+# PHASE 2 CHECKPOINT BEFORE DATE CLEANING
+# ---------------------------------------------------------
+
+checkpoint_summary <- tibble(
+  check = c(
+    "Total cleaned records",
+    "Identification-quality records",
+    "Evidence-type records",
+    "Strike-result records",
+    "Vessel-category records",
+    "Ocean-basin records"
+  ),
+  total = c(
+    nrow(ship_strikes_clean),
+    sum(
+      ship_strikes_clean |>
+        count(id_quality_clean) |>
+        pull(n)
+    ),
+    sum(
+      ship_strikes_clean |>
+        count(evidence_type_clean) |>
+        pull(n)
+    ),
+    sum(
+      ship_strikes_clean |>
+        count(strike_result_clean) |>
+        pull(n)
+    ),
+    sum(
+      ship_strikes_clean |>
+        count(vessel_category) |>
+        pull(n)
+    ),
+    sum(
+      ship_strikes_clean |>
+        count(ocean_basin) |>
+        pull(n)
+    )
+  )
+)
+
+checkpoint_summary
+```
+```{r}
+stopifnot(
+  nrow(ship_strikes_clean) == 538,
+
+  sum(
+    ship_strikes_clean |>
+      count(id_quality_clean) |>
+      pull(n)
+  ) == 538,
+
+  sum(
+    ship_strikes_clean |>
+      count(evidence_type_clean) |>
+      pull(n)
+  ) == 538,
+
+  sum(
+    ship_strikes_clean |>
+      count(strike_result_clean) |>
+      pull(n)
+  ) == 538,
+
+  sum(
+    ship_strikes_clean |>
+      count(vessel_category) |>
+      pull(n)
+  ) == 538,
+
+  sum(
+    ship_strikes_clean |>
+      count(ocean_basin) |>
+      pull(n)
+  ) == 538,
+
+  !anyNA(ship_strikes_clean$strike_result_clean),
+  !anyNA(ship_strikes_clean$vessel_category),
+  !anyNA(ship_strikes_clean$ocean_basin)
+)
+
+message("Checkpoint passed: all 538 records are accounted for.")
+```
+
+
+
+
+
+
+```{r}
+# Construct transparent temporal variables
+# ---------------------------------------------------------
+# STEP 2.11A: EXTRACT DESCRIPTIVE DATE INFORMATION
+# ---------------------------------------------------------
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    # Standardise the descriptive text for pattern matching
+    date_description_clean = str_to_lower(
+      str_squish(evidence_date_descriptive)
+    ),
+
+    # Extract every four-digit year contained in the description
+    extracted_years = str_extract_all(
+      coalesce(date_description_clean, ""),
+      "(?:18|19|20)\\d{2}"
+    ),
+
+    # Count how many years were found
+    n_extracted_years = lengths(extracted_years),
+
+    # Extract the first year, where present
+    first_extracted_year = map_int(
+      extracted_years,
+      ~ if (length(.x) == 0) {
+        NA_integer_
+      } else {
+        as.integer(.x[[1]])
+      }
+    ),
+
+    # Extract the final year, where present
+    last_extracted_year = map_int(
+      extracted_years,
+      ~ if (length(.x) == 0) {
+        NA_integer_
+      } else {
+        as.integer(.x[[length(.x)]])
+      }
+    ),
+
+    # Detect descriptions such as "1930s" and "late 1980's"
+    is_decade_description = str_detect(
+      coalesce(date_description_clean, ""),
+      "(?:18|19|20)\\d0'?s"
+    )
+  )
+```
+
+```{r}
+# ---------------------------------------------------------
+# STEP 2.11B: CLASSIFY DATE PRECISION
+# ---------------------------------------------------------
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+    date_precision = case_when(
+
+      # Exact date always has the highest priority
+      !is.na(evidence_date) ~
+        "Exact date",
+
+      # Neither field contains date information
+      is.na(evidence_date_descriptive) ~
+        "No date information",
+
+      # A reporting date may not represent the incident date
+      str_detect(
+        coalesce(date_description_clean, ""),
+        "\\breport(?:ed|ing)?\\b"
+      ) ~
+        "Reporting date only",
+
+      # Incident occurred sometime before the stated date
+      str_detect(
+        coalesce(date_description_clean, ""),
+        "\\bbefore\\b"
+      ) ~
+        "Before specified date",
+
+      # Two or more years indicate an interval
+      n_extracted_years >= 2 ~
+        "Date range",
+
+      # Examples: "Mid 1930s" or "late 1980's"
+      is_decade_description ~
+        "Decade only",
+
+      # One identifiable incident year
+      n_extracted_years == 1 ~
+        "Descriptive year",
+
+      # Text exists but no usable year can be extracted
+      TRUE ~
+        "Unresolved descriptive date"
+    )
+  )
+```
+
+```{r}
+# ---------------------------------------------------------
+# STEP 2.11C: CREATE TEMPORAL BOUNDS
+# ---------------------------------------------------------
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+    year_start = case_when(
+
+      date_precision == "Exact date" ~
+        lubridate::year(evidence_date),
+
+      date_precision == "Descriptive year" ~
+        first_extracted_year,
+
+      date_precision == "Date range" ~
+        first_extracted_year,
+
+      date_precision == "Decade only" ~
+        first_extracted_year,
+
+      TRUE ~
+        NA_integer_
+    ),
+
+    year_end = case_when(
+
+      date_precision == "Exact date" ~
+        lubridate::year(evidence_date),
+
+      date_precision == "Descriptive year" ~
+        first_extracted_year,
+
+      date_precision == "Date range" ~
+        last_extracted_year,
+
+      date_precision == "Decade only" ~
+        first_extracted_year + 9L,
+
+      # This is an upper boundary, not an observed incident year
+      date_precision == "Before specified date" ~
+        first_extracted_year,
+
+      TRUE ~
+        NA_integer_
+    )
+  )
+```
+
+```{r}
+# ---------------------------------------------------------
+# STEP 2.11D: CREATE ANALYSIS YEAR
+# ---------------------------------------------------------
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+    analysis_year = case_when(
+
+      date_precision == "Exact date" ~
+        lubridate::year(evidence_date),
+
+      date_precision == "Descriptive year" ~
+        first_extracted_year,
+
+      # Ranges, decades and uncertain dates remain missing
+      TRUE ~
+        NA_integer_
+    ),
+
+    year_source = case_when(
+
+      date_precision == "Exact date" ~
+        "Exact date",
+
+      date_precision == "Descriptive year" ~
+        "Descriptive date",
+
+      TRUE ~
+        "No single usable year"
+    ),
+
+    analysis_decade = if_else(
+      !is.na(analysis_year),
+      paste0(
+        floor(analysis_year / 10) * 10,
+        "s"
+      ),
+      NA_character_
+    )
+  )
+```
+
+```{r}
+ship_strikes_clean <- ship_strikes_clean |>
+  select(
+    -extracted_years,
+    -n_extracted_years,
+    -first_extracted_year,
+    -last_extracted_year,
+    -is_decade_description
+  )
+```
+
+```{r}
+date_precision_summary <- ship_strikes_clean |>
+  count(
+    date_precision,
+    sort = TRUE,
+    name = "number_of_records"
+  ) |>
+  mutate(
+    percentage = round(
+      100 * number_of_records / sum(number_of_records),
+      1
+    )
+  )
+
+date_precision_summary
+```
+
+```{r}
+temporal_summary <- ship_strikes_clean |>
+  summarise(
+    total_records = n(),
+
+    exact_date_records =
+      sum(date_precision == "Exact date"),
+
+    descriptive_year_records =
+      sum(date_precision == "Descriptive year"),
+
+    usable_analysis_year_records =
+      sum(!is.na(analysis_year)),
+
+    records_without_single_year =
+      sum(is.na(analysis_year)),
+
+    earliest_analysis_year =
+      min(analysis_year, na.rm = TRUE),
+
+    latest_analysis_year =
+      max(analysis_year, na.rm = TRUE)
+  )
+
+temporal_summary
+```
+
+```{r}
+# ---------------------------------------------------------
+# STEP 2.12: CREATE ANALYSIS-INCLUSION FLAGS
+# ---------------------------------------------------------
+
+ship_strikes_clean <- ship_strikes_clean |>
+  mutate(
+
+    # Include records that have a usable species name
+    include_species_frequency =
+      !is.na(species_analysis_name),
+
+    # Include records with a usable species name and known outcome
+    include_species_fatality =
+      !is.na(species_analysis_name) &
+      outcome_known,
+
+    # Sensitivity analysis restricted to confirmed identifications
+    include_confirmed_species =
+      !is.na(species_analysis_name) &
+      id_quality_clean == "Confirmed",
+
+    # Include records with both known outcome and known vessel category
+    include_vessel_outcome =
+      outcome_known &
+      as.character(vessel_category) != "Unknown",
+
+    # Include records with both known outcome and known ocean basin
+    include_region_outcome =
+      outcome_known &
+      as.character(ocean_basin) != "Unknown"
+  )
+```
+
+```{r}
+flag_summary <- tibble(
+  measure = c(
+    "Total cleaned records",
+    "Species-frequency records",
+    "Species-fatality records",
+    "Confirmed-species records",
+    "Vessel-outcome records",
+    "Region-outcome records"
+  ),
+  value = c(
+    nrow(ship_strikes_clean),
+    sum(ship_strikes_clean$include_species_frequency),
+    sum(ship_strikes_clean$include_species_fatality),
+    sum(ship_strikes_clean$include_confirmed_species),
+    sum(ship_strikes_clean$include_vessel_outcome),
+    sum(ship_strikes_clean$include_region_outcome)
+  )
+)
+
+flag_summary
+```
+
+```{r}
+stopifnot(
+  nrow(ship_strikes_clean) == 538,
+  sum(ship_strikes_clean$include_species_frequency) <= 538,
+  sum(ship_strikes_clean$include_species_fatality) <= 538,
+  sum(ship_strikes_clean$include_confirmed_species) <= 538,
+  sum(ship_strikes_clean$include_vessel_outcome) <= 538,
+  sum(ship_strikes_clean$include_region_outcome) <= 538
+)
+
+message("Step 2.12 passed: analysis-inclusion flags created successfully.")
+```
+```{r}
+# ---------------------------------------------------------
+# STEP 2.13: FINAL CLEANING VALIDATION
+# ---------------------------------------------------------
+
+stopifnot(
+
+  # All original records were retained
+  nrow(ship_strikes_clean) ==
+    nrow(ship_strikes_raw),
+
+  # Every record has a unique identifier
+  n_distinct(ship_strikes_clean$record_id) ==
+    nrow(ship_strikes_clean),
+
+  # Core cleaned categories contain no missing values
+  !anyNA(ship_strikes_clean$strike_result_clean),
+  !anyNA(ship_strikes_clean$vessel_category),
+  !anyNA(ship_strikes_clean$ocean_basin),
+  !anyNA(ship_strikes_clean$date_precision),
+
+  # Inclusion flags contain no missing values
+  !anyNA(ship_strikes_clean$include_species_frequency),
+  !anyNA(ship_strikes_clean$include_species_fatality),
+  !anyNA(ship_strikes_clean$include_confirmed_species),
+  !anyNA(ship_strikes_clean$include_vessel_outcome),
+  !anyNA(ship_strikes_clean$include_region_outcome),
+
+  # Species-fatality records must also be species-frequency records
+  all(
+    !ship_strikes_clean$include_species_fatality |
+      ship_strikes_clean$include_species_frequency
+  ),
+
+  # Vessel-outcome records must have known outcomes and vessels
+  all(
+    !ship_strikes_clean$include_vessel_outcome |
+      (
+        ship_strikes_clean$outcome_known &
+        as.character(
+          ship_strikes_clean$vessel_category
+        ) != "Unknown"
+      )
+  ),
+
+  # Region-outcome records must have known outcomes and regions
+  all(
+    !ship_strikes_clean$include_region_outcome |
+      (
+        ship_strikes_clean$outcome_known &
+        as.character(
+          ship_strikes_clean$ocean_basin
+        ) != "Unknown"
+      )
+  ),
+
+  # Exact dates must match their derived analysis years
+  all(
+    ship_strikes_clean$analysis_year[
+      ship_strikes_clean$date_precision == "Exact date"
+    ] ==
+      lubridate::year(
+        ship_strikes_clean$evidence_date[
+          ship_strikes_clean$date_precision == "Exact date"
+        ]
+      )
+  )
+)
+
+message(
+  "Step 2.13 passed: all final cleaning checks were successful."
+)
+```
+
+```{r}
+phase_2_summary <- tibble(
+  measure = c(
+    "Original records",
+    "Cleaned records",
+    "Duplicate original records",
+    "Species-frequency records",
+    "Species-fatality records",
+    "Confirmed-species records",
+    "Known-outcome records",
+    "Documented deaths",
+    "Vessel-outcome records",
+    "Region-outcome records",
+    "Records with a usable analysis year"
+  ),
+
+  value = c(
+    nrow(ship_strikes_raw),
+    nrow(ship_strikes_clean),
+    sum(duplicated(ship_strikes_raw)),
+    sum(ship_strikes_clean$include_species_frequency),
+    sum(ship_strikes_clean$include_species_fatality),
+    sum(ship_strikes_clean$include_confirmed_species),
+    sum(ship_strikes_clean$outcome_known),
+    sum(
+      ship_strikes_clean$fatal_outcome == 1,
+      na.rm = TRUE
+    ),
+    sum(ship_strikes_clean$include_vessel_outcome),
+    sum(ship_strikes_clean$include_region_outcome),
+    sum(!is.na(ship_strikes_clean$analysis_year))
+  )
+)
+
+phase_2_summary
+```
+
+## Analysis-specific datasets
+
+Separate analysis datasets were created from the cleaned master dataset using
+the previously defined inclusion flags. This ensured that each analysis used
+only records containing the information required for that specific question,
+while the complete cleaned dataset remained unchanged.
+
+Creating separate datasets also made changes in sample size transparent and
+reduced the risk of applying inconsistent filters during subsequent analyses.
+
+```{r}
+# ---------------------------------------------------------
+# STEP 2.14: CREATE ANALYSIS-SPECIFIC DATASETS
+# ---------------------------------------------------------
+
+# Records suitable for species strike-frequency analysis
+species_frequency_data <- ship_strikes_clean |>
+  filter(include_species_frequency)
+
+# Records suitable for species fatality-proportion analysis
+species_fatality_data <- ship_strikes_clean |>
+  filter(include_species_fatality)
+
+# Records suitable for confirmed-identification sensitivity analysis
+confirmed_species_data <- ship_strikes_clean |>
+  filter(include_confirmed_species)
+
+# Records suitable for vessel category versus outcome analysis
+vessel_outcome_data <- ship_strikes_clean |>
+  filter(include_vessel_outcome)
+
+# Records suitable for ocean basin versus outcome analysis
+region_outcome_data <- ship_strikes_clean |>
+  filter(include_region_outcome)
+
+# Records suitable for temporal analysis
+temporal_analysis_data <- ship_strikes_clean |>
+  filter(!is.na(analysis_year))
+```
+
+```{r}
+analysis_dataset_summary <- tibble(
+  dataset = c(
+    "Complete cleaned dataset",
+    "Species frequency",
+    "Species fatality",
+    "Confirmed species",
+    "Vessel outcome",
+    "Region outcome",
+    "Temporal analysis"
+  ),
+
+  records = c(
+    nrow(ship_strikes_clean),
+    nrow(species_frequency_data),
+    nrow(species_fatality_data),
+    nrow(confirmed_species_data),
+    nrow(vessel_outcome_data),
+    nrow(region_outcome_data),
+    nrow(temporal_analysis_data)
+  ),
+
+  percentage_of_cleaned_data = round(
+    100 * records / nrow(ship_strikes_clean),
+    1
+  )
+)
+
+analysis_dataset_summary
+```
+```{r}
+stopifnot(
+
+  nrow(species_frequency_data) == 449,
+  nrow(species_fatality_data) == 174,
+  nrow(confirmed_species_data) == 386,
+  nrow(vessel_outcome_data) == 121,
+  nrow(region_outcome_data) == 216,
+  nrow(temporal_analysis_data) == 526,
+
+  # Species-frequency dataset should contain no missing analysis names
+  !anyNA(
+    species_frequency_data$species_analysis_name
+  ),
+
+  # Species-fatality dataset should contain no missing outcomes
+  !anyNA(
+    species_fatality_data$fatal_outcome
+  ),
+
+  # Confirmed-species dataset should contain confirmed IDs only
+  all(
+    confirmed_species_data$id_quality_clean ==
+      "Confirmed"
+  ),
+
+  # Vessel-outcome dataset should not contain unknown vessels
+  all(
+    as.character(
+      vessel_outcome_data$vessel_category
+    ) != "Unknown"
+  ),
+
+  # Region-outcome dataset should not contain unknown regions
+  all(
+    as.character(
+      region_outcome_data$ocean_basin
+    ) != "Unknown"
+  ),
+
+  # Temporal dataset should contain no missing analysis years
+  !anyNA(
+    temporal_analysis_data$analysis_year
+  )
+)
+
+message(
+  "Step 2.14 passed: all analysis datasets were created successfully."
+)
+```
+
+```{r}
+#Save the cleaned data and audit files
+
+dir.create(
+  here("data", "processed"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+saveRDS(
+  ship_strikes_clean,
+  here(
+    "data",
+    "processed",
+    "cetacean_ship_strikes_clean.rds"
+  )
+)
+
+write_csv(
+  ship_strikes_clean,
+  here(
+    "data",
+    "processed",
+    "cetacean_ship_strikes_clean.csv"
+  )
+)
+```
+
+```{r}
+# Recreate the date-audit table
+date_audit <- ship_strikes_clean |>
+  filter(is.na(evidence_date)) |>
+  select(
+    record_id,
+    evidence_date,
+    evidence_date_descriptive,
+    date_precision,
+    year_start,
+    year_end,
+    analysis_year,
+    year_source
+  ) |>
+  arrange(
+    date_precision,
+    year_start,
+    evidence_date_descriptive
+  )
+
+date_audit
+```
+
+
+```{r}
+saveRDS(
+  species_frequency_data,
+  here(
+    "data",
+    "processed",
+    "species_frequency_data.rds"
+  )
+)
+
+saveRDS(
+  species_fatality_data,
+  here(
+    "data",
+    "processed",
+    "species_fatality_data.rds"
+  )
+)
+
+saveRDS(
+  confirmed_species_data,
+  here(
+    "data",
+    "processed",
+    "confirmed_species_data.rds"
+  )
+)
+
+saveRDS(
+  vessel_outcome_data,
+  here(
+    "data",
+    "processed",
+    "vessel_outcome_data.rds"
+  )
+)
+
+saveRDS(
+  region_outcome_data,
+  here(
+    "data",
+    "processed",
+    "region_outcome_data.rds"
+  )
+)
+
+saveRDS(
+  temporal_analysis_data,
+  here(
+    "data",
+    "processed",
+    "temporal_analysis_data.rds"
+  )
+)
+```
+
+```{r}
+write_csv(
+  vessel_crosswalk,
+  here(
+    "data",
+    "processed",
+    "vessel_cleaning_crosswalk.csv"
+  )
+)
+
+write_csv(
+  region_crosswalk,
+  here(
+    "data",
+    "processed",
+    "region_cleaning_crosswalk.csv"
+  )
+)
+
+write_csv(
+  date_audit,
+  here(
+    "data",
+    "processed",
+    "date_cleaning_audit.csv"
+  )
+)
+
+write_csv(
+  phase_2_summary,
+  here(
+    "data",
+    "processed",
+    "phase_2_summary.csv"
+  )
+)
+
+write_csv(
+  analysis_dataset_summary,
+  here(
+    "data",
+    "processed",
+    "analysis_dataset_summary.csv"
+  )
+)
+```
+
+```{r}
+list.files(
+  here("data", "processed"),
+  full.names = FALSE
+)
+```
+
+```{r}
+# Test that saved files can be read successfully
+clean_data_check <- readRDS(
+  here(
+    "data",
+    "processed",
+    "cetacean_ship_strikes_clean.rds"
+  )
+)
+
+summary_check <- read_csv(
+  here(
+    "data",
+    "processed",
+    "phase_2_summary.csv"
+  ),
+  show_col_types = FALSE
+)
+
+stopifnot(
+  nrow(clean_data_check) == 538,
+  n_distinct(clean_data_check$record_id) == 538,
+  nrow(summary_check) == 11
+)
+
+message("Saved Phase 2 files were reopened successfully.")
+```
+
+```{r}
+glimpse(clean_data_check)
+```
+
+# Phase 3: Exploratory Analysis and Results
+
+Phase 3 examined patterns in reported cetacean ship-strike records. Analyses
+were conducted using the analysis-specific datasets created during Phase 2.
+
+Species vulnerability was evaluated using two complementary measures:
+
+1. reported strike frequency, defined as the number of documented records for
+   each identified species; and
+2. fatality proportion, defined as the number of documented deaths divided by
+   the number of records with a known outcome.
+
+Reported strike frequency was interpreted as documented strike burden rather
+than population-level collision risk because the dataset does not include
+species abundance, vessel-traffic exposure or reporting effort.
+
+```{r}
+# ---------------------------------------------------------
+# STEP 3.1: CREATE SPECIES-LEVEL SUMMARY
+# ---------------------------------------------------------
+
+species_summary <- ship_strikes_clean |>
+  filter(include_species_frequency) |>
+  group_by(species_analysis_name) |>
+  summarise(
+
+    # Total documented records for this species
+    reported_strikes = n(),
+
+    # Number marked as confirmed identification
+    confirmed_identifications = sum(
+      id_quality_clean == "Confirmed"
+    ),
+
+    # Records with a documented strike outcome
+    known_outcomes = sum(
+      outcome_known
+    ),
+
+    # Records without a documented outcome
+    unknown_outcomes = sum(
+      !outcome_known
+    ),
+
+    # Fatal known outcomes
+    documented_deaths = sum(
+      fatal_outcome == 1,
+      na.rm = TRUE
+    ),
+
+    # Non-fatal known outcomes
+    non_fatal_known_outcomes = sum(
+      fatal_outcome == 0,
+      na.rm = TRUE
+    ),
+
+    .groups = "drop"
+  ) |>
+  mutate(
+
+    # Proportion of species records marked confirmed
+    confirmed_identification_proportion =
+      confirmed_identifications / reported_strikes,
+
+    # Proportion of species records with a known outcome
+    outcome_coverage =
+      known_outcomes / reported_strikes,
+
+    # Unknown outcomes are excluded from this denominator
+    fatality_proportion = if_else(
+      known_outcomes > 0,
+      documented_deaths / known_outcomes,
+      NA_real_
+    )
+  ) |>
+  arrange(
+    desc(reported_strikes),
+    species_analysis_name
+  ) |>
+  mutate(
+    frequency_rank = row_number()
+  )
+
+species_summary
+```
+
+```{r}
+stopifnot(
+
+  # All species-frequency records are represented
+  sum(species_summary$reported_strikes) ==
+    nrow(species_frequency_data),
+
+  # All known species outcomes are represented
+  sum(species_summary$known_outcomes) ==
+    nrow(species_fatality_data),
+
+  # Known outcomes equal fatal plus non-fatal outcomes
+  all(
+    species_summary$known_outcomes ==
+      species_summary$documented_deaths +
+      species_summary$non_fatal_known_outcomes
+  ),
+
+  # Proportions remain between zero and one
+  all(
+    species_summary$fatality_proportion >= 0 &
+      species_summary$fatality_proportion <= 1,
+    na.rm = TRUE
+  )
+)
+
+message(
+  "Step 3.1 passed: species summary created successfully."
+)
+```
+
+```{r}
+nrow(species_summary)
+```
+
+```{r}
+#Exaxmine reported strike frequency 
+# Ten species with the greatest number of documented strikes
+top_species_frequency <- species_summary |>
+  slice_max(
+    order_by = reported_strikes,
+    n = 10,
+    with_ties = FALSE
+  ) |>
+  arrange(
+    desc(reported_strikes),
+    species_analysis_name
+  ) |>
+  select(
+    frequency_rank,
+    species_analysis_name,
+    reported_strikes,
+    confirmed_identifications,
+    known_outcomes,
+    documented_deaths,
+    outcome_coverage,
+    fatality_proportion
+  )
+
+top_species_frequency
+```
+
+```{r}
+#Figure 
+# Prepare plotting data
+species_frequency_plot_data <- top_species_frequency |>
+  mutate(
+    species_analysis_name = forcats::fct_reorder(
+      species_analysis_name,
+      reported_strikes
+    )
+  )
+
+# Create plot
+species_frequency_plot <- ggplot(
+  species_frequency_plot_data,
+  aes(
+    x = reported_strikes,
+    y = species_analysis_name
+  )
+) +
+  geom_col(
+    width = 0.75
+  ) +
+  geom_text(
+    aes(label = reported_strikes),
+    hjust = -0.2,
+    size = 3.8
+  ) +
+  scale_x_continuous(
+    expand = expansion(
+      mult = c(0, 0.12)
+    )
+  ) +
+  labs(
+    title = paste0(
+      "Ten most frequently identified species; ",
+      "n = ",
+      nrow(species_frequency_data),
+      " species-identified records"
+    ),
+    x = "Number of documented ship-strike records",
+    y = NULL
+    
+  ) +
+  theme_minimal(
+    base_size = 12
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      face = "bold"
+    ),
+    plot.caption = element_text(
+      hjust = 0
+    )
+  )
+
+species_frequency_plot
+```
+
+```{r}
+dir.create(
+  here("figures"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+ggsave(
+  filename = here(
+    "figures",
+    "species_reported_strike_frequency.png"
+  ),
+  plot = species_frequency_plot,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  dpi = 300
+)
+```
+
+
+```{r}
+#Calculate uncertainty around fatality proportions
+# ---------------------------------------------------------
+# CUSTOM FUNCTION: WILSON CONFIDENCE INTERVAL
+# ---------------------------------------------------------
+
+wilson_interval <- function(
+  successes,
+  trials,
+  confidence_level = 0.95
+) {
+
+  # Return missing values when there are no usable trials
+  if (
+    is.na(trials) ||
+    trials == 0
+  ) {
+    return(
+      c(
+        lower = NA_real_,
+        upper = NA_real_
+      )
+    )
+  }
+
+  z_value <- qnorm(
+    1 - (1 - confidence_level) / 2
+  )
+
+  observed_proportion <-
+    successes / trials
+
+  denominator <-
+    1 + (z_value^2 / trials)
+
+  centre <-
+    (
+      observed_proportion +
+        z_value^2 / (2 * trials)
+    ) /
+    denominator
+
+  margin <-
+    (
+      z_value *
+        sqrt(
+          (
+            observed_proportion *
+              (1 - observed_proportion) /
+              trials
+          ) +
+            (
+              z_value^2 /
+                (4 * trials^2)
+            )
+        )
+    ) /
+    denominator
+
+  c(
+    lower = max(
+      0,
+      centre - margin
+    ),
+    upper = min(
+      1,
+      centre + margin
+    )
+  )
+}
+```
+
+```{r}
+wilson_interval(
+  successes = 55,
+  trials = 62
+)
+```
+```{r}
+#Applying it to every species 
+species_summary <- species_summary |>
+  mutate(
+    fatality_interval = map2(
+      documented_deaths,
+      known_outcomes,
+      ~ wilson_interval(
+        successes = .x,
+        trials = .y
+      )
+    ),
+
+    fatality_ci_lower = map_dbl(
+      fatality_interval,
+      "lower"
+    ),
+
+    fatality_ci_upper = map_dbl(
+      fatality_interval,
+      "upper"
+    )
+  ) |>
+  select(
+    -fatality_interval
+  )
+
+species_summary
+```
+
+```{r}
+#3.5 Create a defensible fatality comparison 
+#Only retain species that have at least five known outcomes
+minimum_known_outcomes <- 5
+
+species_fatality_display <- species_summary |>
+  filter(
+    known_outcomes >= minimum_known_outcomes
+  ) |>
+  arrange(
+    desc(fatality_proportion),
+    desc(known_outcomes)
+  ) |>
+  select(
+    species_analysis_name,
+    reported_strikes,
+    known_outcomes,
+    documented_deaths,
+    non_fatal_known_outcomes,
+    fatality_proportion,
+    fatality_ci_lower,
+    fatality_ci_upper,
+    outcome_coverage
+  )
+
+species_fatality_display
+```
+
+```{r}
+# Create a folder for analytical result tables
+dir.create(
+  here("results", "tables"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+```
+
+```{r}
+write_csv(
+  species_summary,
+  here(
+    "results",
+    "tables",
+    "species_summary.csv"
+  )
+)
+```
+
+```{r}
+write_csv(
+  top_species_frequency,
+  here(
+    "results",
+    "tables",
+    "top_species_frequency.csv"
+  )
+)
+```
+
+```{r}
+write_csv(
+  species_fatality_display,
+  here(
+    "results",
+    "tables",
+    "species_fatality_display.csv"
+  )
+)
+```
+
+```{r}
+ggsave(
+  filename = here(
+    "figures",
+    "species_reported_strike_frequency.png"
+  ),
+  plot = species_frequency_plot,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  dpi = 300
+)
+
+ggsave(
+  filename = here(
+    "figures",
+    "species_reported_strike_frequency.pdf"
+  ),
+  plot = species_frequency_plot,
+  width = 9,
+  height = 5.5,
+  units = "in"
+)
+```
+
+## Species fatality proportions
+
+Fatality proportions were calculated using only records with a known strike
+outcome. Unknown outcomes were excluded from the denominator.
+
+To avoid overemphasising percentages based on extremely small samples, the
+main figure was restricted to species with at least five known outcomes.
+However, all species remained available in the complete species summary.
+
+Wilson 95% confidence intervals were used to display uncertainty around each
+fatality proportion.
+
+```{r}
+#Calculate overall identified-species fatality proportion
+overall_species_fatality <- species_summary |>
+  summarise(
+    deaths = sum(documented_deaths),
+    known_outcomes = sum(known_outcomes),
+    fatality_proportion = deaths / known_outcomes
+  )
+
+overall_species_fatality
+```
+```{r}
+#Plotting data
+species_fatality_plot_data <- species_fatality_display |>
+  mutate(
+    species_analysis_name = forcats::fct_reorder(
+      species_analysis_name,
+      fatality_proportion
+    ),
+
+    result_label = paste0(
+      documented_deaths,
+      "/",
+      known_outcomes
+    )
+  )
+```
+
+```{r}
+# Create plot
+species_fatality_plot <- ggplot(
+  species_fatality_plot_data,
+  aes(
+    x = fatality_proportion,
+    y = species_analysis_name
+  )
+) +
+  geom_vline(
+    xintercept =
+      overall_species_fatality$fatality_proportion,
+    linetype = "dashed",
+    linewidth = 0.7
+  ) +
+  geom_errorbarh(
+    aes(
+      xmin = fatality_ci_lower,
+      xmax = fatality_ci_upper
+    ),
+    height = 0.18,
+    linewidth = 0.7
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 1, by = 0.25),
+    labels = scales::label_percent(
+      accuracy = 1
+    ),
+    expand = expansion(
+      mult = c(0.02, 0.02)
+    )
+  ) +
+  coord_cartesian(
+    xlim = c(0, 1),
+    clip = "off"
+  ) +
+  labs(
+    title = "Fatality estimates varied among frequently recorded species",
+    x = "Fatality proportion among records with known outcomes",
+    y = NULL,
+  ) +
+  theme_minimal(
+    base_size = 12
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      face = "bold"
+    ),
+    plot.margin = margin(10,10,10,10)
+  )
+
+species_fatality_plot
+```
+
+```{r}
+ggsave(
+  filename = here(
+    "figures",
+    "species_fatality_proportions.png"
+  ),
+  plot = species_fatality_plot,
+  width = 9,
+  height = 5.8,
+  units = "in",
+  dpi = 300
+)
+
+ggsave(
+  filename = here(
+    "figures",
+    "species_fatality_proportions.pdf"
+  ),
+  plot = species_fatality_plot,
+  width = 9,
+  height = 5.8,
+  units = "in"
+)
+```
+
+```{r}
+#3.7 Confirmed-identification sensitivity analysis
+confirmed_frequency_summary <- ship_strikes_clean |>
+  filter(include_confirmed_species) |>
+  count(
+    species_analysis_name,
+    name = "confirmed_reported_strikes",
+    sort = TRUE
+  ) |>
+  mutate(
+    confirmed_frequency_rank =
+      min_rank(
+        desc(confirmed_reported_strikes)
+      )
+  )
+
+#Join full species summary
+species_frequency_sensitivity <- species_summary |>
+  select(
+    species_analysis_name,
+    reported_strikes,
+    frequency_rank,
+    confirmed_identifications
+  ) |>
+  left_join(
+    confirmed_frequency_summary,
+    by = "species_analysis_name"
+  ) |>
+  mutate(
+    confirmed_reported_strikes =
+      coalesce(
+        confirmed_reported_strikes,
+        0L
+      ),
+
+    rank_change =
+      confirmed_frequency_rank -
+      frequency_rank
+  ) |>
+  arrange(
+    frequency_rank
+  )
+
+species_frequency_sensitivity
+
+#Calculate rank agreement 
+frequency_rank_correlation <- cor(
+  species_frequency_sensitivity$reported_strikes,
+  species_frequency_sensitivity$confirmed_reported_strikes,
+  method = "spearman"
+)
+
+frequency_rank_correlation
+
+# Compare the top ten lists
+top_ten_all <- species_frequency_sensitivity |>
+  slice_min(
+    frequency_rank,
+    n = 10,
+    with_ties = FALSE
+  ) |>
+  pull(species_analysis_name)
+
+top_ten_confirmed <- species_frequency_sensitivity |>
+  slice_min(
+    confirmed_frequency_rank,
+    n = 10,
+    with_ties = FALSE
+  ) |>
+  pull(species_analysis_name)
+
+top_ten_overlap <- length(
+  intersect(
+    top_ten_all,
+    top_ten_confirmed
+  )
+)
+
+top_ten_overlap
+```
+
+```{r}
+# 3.8 Confirmed-only fatality comparison 
+confirmed_fatality_summary <- ship_strikes_clean |>
+  filter(
+    include_confirmed_species,
+    outcome_known
+  ) |>
+  group_by(
+    species_analysis_name
+  ) |>
+  summarise(
+    confirmed_known_outcomes = n(),
+
+    confirmed_deaths = sum(
+      fatal_outcome == 1
+    ),
+
+    confirmed_fatality_proportion =
+      confirmed_deaths /
+      confirmed_known_outcomes,
+
+    .groups = "drop"
+  )
+
+#Join with full fatality results
+species_fatality_sensitivity <- species_summary |>
+  select(
+    species_analysis_name,
+    known_outcomes,
+    documented_deaths,
+    fatality_proportion
+  ) |>
+  left_join(
+    confirmed_fatality_summary,
+    by = "species_analysis_name"
+  ) |>
+  mutate(
+    fatality_difference =
+      confirmed_fatality_proportion -
+      fatality_proportion
+  ) |>
+  arrange(
+    desc(known_outcomes)
+  )
+
+species_fatality_sensitivity
+
+#Display species with at least 5 outcomes
+species_fatality_sensitivity_display <-
+  species_fatality_sensitivity |>
+  filter(
+    known_outcomes >= 5,
+    confirmed_known_outcomes >= 5
+  )
+
+species_fatality_sensitivity_display
+
+#Summarise sensitivity results
+sensitivity_summary <- tibble(
+  measure = c(
+    "Spearman frequency correlation",
+    "Species shared by both top-ten lists",
+    "Maximum absolute fatality difference"
+  ),
+
+  value = c(
+    frequency_rank_correlation,
+    top_ten_overlap,
+    max(
+      abs(
+        species_fatality_sensitivity_display$
+          fatality_difference
+      ),
+      na.rm = TRUE
+    )
+  )
+)
+
+sensitivity_summary
+```
+```{r}
+#save new results table 
+write_csv(
+  species_frequency_sensitivity,
+  here(
+    "results",
+    "tables",
+    "species_frequency_sensitivity.csv"
+  )
+)
+
+write_csv(
+  species_fatality_sensitivity,
+  here(
+    "results",
+    "tables",
+    "species_fatality_sensitivity.csv"
+  )
+)
+
+write_csv(
+  sensitivity_summary,
+  here(
+    "results",
+    "tables",
+    "species_sensitivity_summary.csv"
+  )
+)
+```
+
+## Vessel category and strike outcome
+
+Vessel-outcome analyses were restricted to records containing both a known
+vessel category and a known strike outcome. This produced a subset of 121
+records.
+
+For each vessel category, the number of known outcomes, documented deaths and
+fatality proportion were calculated. Wilson 95% confidence intervals were used
+to communicate uncertainty, particularly for vessel categories represented by
+small sample sizes.
+
+These results describe patterns within documented records and should not be
+interpreted as vessel-specific collision risk because the dataset does not
+contain information on vessel abundance, distance travelled or traffic
+exposure.
+
+```{r}
+# ---------------------------------------------------------
+# STEP 3.9: VESSEL CATEGORY AND KNOWN OUTCOMES
+# ---------------------------------------------------------
+
+vessel_outcome_summary <- vessel_outcome_data |>
+  group_by(vessel_category) |>
+  summarise(
+    known_outcomes = n(),
+
+    documented_deaths = sum(
+      fatal_outcome == 1,
+      na.rm = TRUE
+    ),
+
+    non_fatal_outcomes = sum(
+      fatal_outcome == 0,
+      na.rm = TRUE
+    ),
+
+    fatality_proportion =
+      documented_deaths / known_outcomes,
+
+    .groups = "drop"
+  ) |>
+  arrange(
+    desc(fatality_proportion),
+    desc(known_outcomes)
+  )
+
+vessel_outcome_summary
+
+#Validate Total
+stopifnot(
+  sum(vessel_outcome_summary$known_outcomes) ==
+    nrow(vessel_outcome_data),
+
+  all(
+    vessel_outcome_summary$known_outcomes ==
+      vessel_outcome_summary$documented_deaths +
+      vessel_outcome_summary$non_fatal_outcomes
+  ),
+
+  all(
+    between(
+      vessel_outcome_summary$fatality_proportion,
+      0,
+      1
+    )
+  )
+)
+
+message(
+  "Vessel outcome totals validated successfully."
+)
+```
+
+```{r}
+#Add Wilson confience intervals
+vessel_outcome_summary <- vessel_outcome_summary |>
+  mutate(
+    fatality_interval = map2(
+      documented_deaths,
+      known_outcomes,
+      ~ wilson_interval(
+        successes = .x,
+        trials = .y
+      )
+    ),
+
+    fatality_ci_lower = map_dbl(
+      fatality_interval,
+      "lower"
+    ),
+
+    fatality_ci_upper = map_dbl(
+      fatality_interval,
+      "upper"
+    )
+  ) |>
+  select(
+    -fatality_interval
+  )
+
+vessel_outcome_summary
+```
+```{r}
+#Calculate the overall vessel-subset fatality proportion
+overall_vessel_fatality <- vessel_outcome_data |>
+  summarise(
+    known_outcomes = n(),
+
+    documented_deaths = sum(
+      fatal_outcome == 1
+    ),
+
+    fatality_proportion =
+      documented_deaths / known_outcomes
+  )
+
+overall_vessel_fatality
+```
+```{r}
+#3.10 Vessel fatality figure 
+vessel_plot_data <- vessel_outcome_summary |>
+  mutate(
+    vessel_category = forcats::fct_reorder(
+      vessel_category,
+      fatality_proportion
+    )
+  )
+
+vessel_fatality_plot <- ggplot(
+  vessel_plot_data,
+  aes(
+    x = fatality_proportion,
+    y = vessel_category
+  )
+) +
+  geom_vline(
+    xintercept =
+      overall_vessel_fatality$fatality_proportion,
+    linetype = "dashed",
+    linewidth = 0.7
+  ) +
+  geom_errorbarh(
+    aes(
+      xmin = fatality_ci_lower,
+      xmax = fatality_ci_upper
+    ),
+    height = 0.18,
+    linewidth = 0.7
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 1, by = 0.25),
+    labels = scales::label_percent(
+      accuracy = 1
+    )
+  ) +
+  coord_cartesian(
+    xlim = c(0, 1)
+  ) +
+  labs(
+    title = "Fatality proportions differed among documented vessel categories",
+    x = "Fatality proportion among records with known outcomes",
+    y = NULL
+  ) +
+  theme_minimal(
+    base_size = 12
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      face = "bold"
+    )
+  )
+
+vessel_fatality_plot
+```
+
+```{r}
+#Save
+ggsave(
+  filename = here(
+    "figures",
+    "vessel_fatality_proportions.png"
+  ),
+  plot = vessel_fatality_plot,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  dpi = 300
+)
+
+ggsave(
+  filename = here(
+    "figures",
+    "vessel_fatality_proportions.pdf"
+  ),
+  plot = vessel_fatality_plot,
+  width = 9,
+  height = 5.5,
+  units = "in"
+)
+```
+
+```{r}
+#3.11 Inspect sample sizes before interpretation
+vessel_presentation_table <- vessel_outcome_summary |>
+  mutate(
+    fatality_percent = scales::percent(
+      fatality_proportion,
+      accuracy = 0.1
+    ),
+
+    outcome_ratio = paste0(
+      documented_deaths,
+      "/",
+      known_outcomes
+    )
+  ) |>
+  select(
+    vessel_category,
+    known_outcomes,
+    documented_deaths,
+    outcome_ratio,
+    fatality_percent,
+    fatality_ci_lower,
+    fatality_ci_upper
+  )
+
+vessel_presentation_table
+```
+```{r}
+#Save
+write_csv(
+  vessel_outcome_summary,
+  here(
+    "results",
+    "tables",
+    "vessel_outcome_summary.csv"
+  )
+)
+
+write_csv(
+  vessel_presentation_table,
+  here(
+    "results",
+    "tables",
+    "vessel_presentation_table.csv"
+  )
+)
+```
+
+```{r}
+#3.12 Test the association 
+vessel_outcome_contingency <- vessel_outcome_data |>
+  count(
+    vessel_category,
+    fatal_label
+  ) |>
+  filter(
+    fatal_label != "Unknown outcome"
+  ) |>
+  pivot_wider(
+    names_from = fatal_label,
+    values_from = n,
+    values_fill = 0
+  )
+
+vessel_outcome_contingency
+
+#Create the matrix
+vessel_test_matrix <- vessel_outcome_data |>
+  mutate(
+    outcome_group = if_else(
+      fatal_outcome == 1,
+      "Fatal",
+      "Non-fatal"
+    )
+  ) |>
+  count(
+    vessel_category,
+    outcome_group
+  ) |>
+  pivot_wider(
+    names_from = outcome_group,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  column_to_rownames(
+    "vessel_category"
+  ) |>
+  as.matrix()
+
+vessel_test_matrix
+
+#Run the chi-squared test
+vessel_chi_test <- chisq.test(
+  vessel_test_matrix
+)
+
+vessel_chi_test
+vessel_chi_test$expected
+
+#Check the expected frequencies
+vessel_expected_check <- tibble(
+  minimum_expected_count =
+    min(vessel_chi_test$expected),
+
+  cells_below_five =
+    sum(vessel_chi_test$expected < 5),
+
+  percentage_below_five =
+    mean(vessel_chi_test$expected < 5) * 100
+)
+
+vessel_expected_check
+
+#28% of cells have expected counts below five, so used a simulated p-value instead
+set.seed(5014)
+
+vessel_association_test <- chisq.test(
+  vessel_test_matrix,
+  simulate.p.value = TRUE,
+  B = 10000
+)
+
+vessel_association_test
+```
+
+```{r}
+#save
+vessel_test_summary <- tibble(
+  test = "Chi-square test with simulated p-value",
+  statistic = unname(
+    vessel_association_test$statistic
+  ),
+  degrees_of_freedom = unname(
+    vessel_association_test$parameter
+  ),
+  p_value = vessel_association_test$p.value,
+  simulations = 10000
+)
+
+vessel_test_summary
+
+write_csv(
+  vessel_test_summary,
+  here(
+    "results",
+    "tables",
+    "vessel_association_test.csv"
+  )
+)
+```
+
+```{r}
+vessel_expected_check <- tibble(
+  minimum_expected_count =
+    min(vessel_chi_test$expected),
+
+  cells_below_five =
+    sum(vessel_chi_test$expected < 5),
+
+  total_cells =
+    length(vessel_chi_test$expected),
+
+  percentage_below_five =
+    round(
+      mean(vessel_chi_test$expected < 5) * 100,
+      1
+    )
+)
+
+vessel_expected_check
+```
+## Ocean basin and strike outcome
+
+Regional analyses were restricted to records containing both a known strike
+outcome and a known ocean basin. This produced a subset of 216 records.
+
+For each ocean basin, the number of known outcomes, documented deaths and
+fatality proportion were calculated. Wilson 95% confidence intervals were used
+to communicate uncertainty.
+
+These results represent geographic patterns within the documented records.
+They should not be interpreted as estimates of absolute regional collision
+risk because reporting effort, vessel traffic and cetacean abundance were not
+standardised among ocean basins.
+
+```{r}
+# ---------------------------------------------------------
+# STEP 3.13: OCEAN BASIN AND KNOWN OUTCOMES
+# ---------------------------------------------------------
+
+region_outcome_summary <- region_outcome_data |>
+  group_by(ocean_basin) |>
+  summarise(
+    known_outcomes = n(),
+
+    documented_deaths = sum(
+      fatal_outcome == 1,
+      na.rm = TRUE
+    ),
+
+    non_fatal_outcomes = sum(
+      fatal_outcome == 0,
+      na.rm = TRUE
+    ),
+
+    fatality_proportion =
+      documented_deaths / known_outcomes,
+
+    .groups = "drop"
+  ) |>
+  arrange(
+    desc(fatality_proportion),
+    desc(known_outcomes)
+  )
+
+region_outcome_summary
+
+#validate totals
+stopifnot(
+  sum(region_outcome_summary$known_outcomes) ==
+    nrow(region_outcome_data),
+
+  all(
+    region_outcome_summary$known_outcomes ==
+      region_outcome_summary$documented_deaths +
+      region_outcome_summary$non_fatal_outcomes
+  ),
+
+  all(
+    between(
+      region_outcome_summary$fatality_proportion,
+      0,
+      1
+    )
+  )
+)
+
+message(
+  "Regional outcome totals validated successfully."
+)
+
+#Add wilson confidence intervals
+region_outcome_summary <- region_outcome_summary |>
+  mutate(
+    fatality_interval = map2(
+      documented_deaths,
+      known_outcomes,
+      ~ wilson_interval(
+        successes = .x,
+        trials = .y
+      )
+    ),
+
+    fatality_ci_lower = map_dbl(
+      fatality_interval,
+      "lower"
+    ),
+
+    fatality_ci_upper = map_dbl(
+      fatality_interval,
+      "upper"
+    )
+  ) |>
+  select(
+    -fatality_interval
+  )
+
+region_outcome_summary
+
+#Calculate overall fatality proportion
+overall_region_fatality <- region_outcome_data |>
+  summarise(
+    known_outcomes = n(),
+
+    documented_deaths = sum(
+      fatal_outcome == 1,
+      na.rm = TRUE
+    ),
+
+    fatality_proportion =
+      documented_deaths / known_outcomes
+  )
+
+overall_region_fatality
+```
+```{r}
+#3.14 Region fatality figure
+region_plot_data <- region_outcome_summary |>
+  mutate(
+    ocean_basin = forcats::fct_reorder(
+      ocean_basin,
+      fatality_proportion
+    )
+  )
+#Create the plot
+region_fatality_plot <- ggplot(
+  region_plot_data,
+  aes(
+    x = fatality_proportion,
+    y = ocean_basin
+  )
+) +
+  geom_vline(
+    xintercept =
+      overall_region_fatality$fatality_proportion,
+    linetype = "dashed",
+    linewidth = 0.7
+  ) +
+  geom_errorbarh(
+    aes(
+      xmin = fatality_ci_lower,
+      xmax = fatality_ci_upper
+    ),
+    height = 0.18,
+    linewidth = 0.7
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 1, by = 0.25),
+    labels = scales::label_percent(
+      accuracy = 1
+    )
+  ) +
+  coord_cartesian(
+    xlim = c(0, 1)
+  ) +
+  labs(
+    title = "Fatality proportions varied among documented ocean basins",
+    x = "Fatality proportion among records with known outcomes",
+    y = NULL
+  ) +
+  theme_minimal(
+    base_size = 12
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(
+      face = "bold"
+    )
+  )
+
+region_fatality_plot
+```
+```{r}
+#save
+ggsave(
+  filename = here(
+    "figures",
+    "region_fatality_proportions.png"
+  ),
+  plot = region_fatality_plot,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  dpi = 300
+)
+
+ggsave(
+  filename = here(
+    "figures",
+    "region_fatality_proportions.pdf"
+  ),
+  plot = region_fatality_plot,
+  width = 9,
+  height = 5.5,
+  units = "in"
+)
+```
+
+```{r}
+#3.15 Create region presentation table
+region_presentation_table <- region_outcome_summary |>
+  mutate(
+    outcome_ratio = paste0(
+      documented_deaths,
+      "/",
+      known_outcomes
+    ),
+
+    fatality_percent = scales::percent(
+      fatality_proportion,
+      accuracy = 0.1
+    ),
+
+    confidence_interval = paste0(
+      scales::percent(
+        fatality_ci_lower,
+        accuracy = 0.1
+      ),
+      "–",
+      scales::percent(
+        fatality_ci_upper,
+        accuracy = 0.1
+      )
+    )
+  ) |>
+  select(
+    ocean_basin,
+    known_outcomes,
+    documented_deaths,
+    non_fatal_outcomes,
+    outcome_ratio,
+    fatality_percent,
+    confidence_interval
+  )
+
+region_presentation_table
+
+#save
+write_csv(
+  region_outcome_summary,
+  here(
+    "results",
+    "tables",
+    "region_outcome_summary.csv"
+  )
+)
+
+write_csv(
+  region_presentation_table,
+  here(
+    "results",
+    "tables",
+    "region_presentation_table.csv"
+  )
+)
+```
+```{r}
+#3.16 Test the association
+region_test_matrix <- region_outcome_data |>
+  mutate(
+    outcome_group = if_else(
+      fatal_outcome == 1,
+      "Fatal",
+      "Non-fatal"
+    )
+  ) |>
+  count(
+    ocean_basin,
+    outcome_group
+  ) |>
+  pivot_wider(
+    names_from = outcome_group,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  column_to_rownames(
+    "ocean_basin"
+  ) |>
+  as.matrix()
+
+region_test_matrix
+
+#run the chi-squared test
+region_chi_test <- chisq.test(
+  region_test_matrix
+)
+
+region_chi_test
+region_chi_test$expected
+
+#Check the expected frequencies
+region_expected_check <- tibble(
+  minimum_expected_count =
+    min(region_chi_test$expected),
+
+  cells_below_five =
+    sum(region_chi_test$expected < 5),
+
+  total_cells =
+    length(region_chi_test$expected),
+
+  percentage_below_five =
+    round(
+      mean(region_chi_test$expected < 5) * 100,
+      1
+    )
+)
+
+region_expected_check
+
+#Run the simulated test 
+set.seed(5014)
+
+region_association_test <- chisq.test(
+  region_test_matrix,
+  simulate.p.value = TRUE,
+  B = 10000
+)
+
+region_association_test
+
+#p < 0.05: the distribution of fatal and non-fatal outcomes differs among the documented ocean basins.
+#Among records with known outcomes, the relative frequency of fatal and non-fatal outcomes differed significantly among ocean basins.
+```
+```{r}
+#save
+region_test_summary <- tibble(
+  test = "Chi-square test with simulated p-value",
+
+  statistic = unname(
+    region_association_test$statistic
+  ),
+
+  p_value =
+    region_association_test$p.value,
+
+  simulations = 10000
+)
+
+region_test_summary
+
+write_csv(
+  region_test_summary,
+  here(
+    "results",
+    "tables",
+    "region_association_test.csv"
+  )
+)
+```
+
+## Association strength
+
+Cramér's V was calculated alongside the simulated chi-square tests to quantify
+the strength of association between strike outcome and each categorical
+predictor. Values closer to zero indicate little association, whereas larger
+values indicate stronger separation of fatal and non-fatal outcomes among
+categories.
+
+Effect sizes were interpreted cautiously because the data represent documented
+records rather than a standardised sample of vessel activity or cetacean
+exposure.
+
+```{r}
+# ---------------------------------------------------------
+# STEP 3.17: CALCULATE CRAMER'S V
+# ---------------------------------------------------------
+
+calculate_cramers_v <- function(test_object, contingency_matrix) {
+
+  chi_square <- unname(test_object$statistic)
+  total_n <- sum(contingency_matrix)
+  matrix_dimensions <- dim(contingency_matrix)
+
+  denominator_dimension <- min(
+    matrix_dimensions[1] - 1,
+    matrix_dimensions[2] - 1
+  )
+
+  sqrt(
+    chi_square /
+      (
+        total_n *
+          denominator_dimension
+      )
+  )
+}
+
+#calculate both effects sizes
+vessel_cramers_v <- calculate_cramers_v(
+  test_object = vessel_association_test,
+  contingency_matrix = vessel_test_matrix
+)
+
+region_cramers_v <- calculate_cramers_v(
+  test_object = region_association_test,
+  contingency_matrix = region_test_matrix
+)
+
+vessel_cramers_v
+region_cramers_v
+
+#One combined resutls table
+association_summary <- tibble(
+  predictor = c(
+    "Vessel category",
+    "Ocean basin"
+  ),
+
+  usable_records = c(
+    sum(vessel_test_matrix),
+    sum(region_test_matrix)
+  ),
+
+  chi_square = c(
+    unname(vessel_association_test$statistic),
+    unname(region_association_test$statistic)
+  ),
+
+  simulated_p_value = c(
+    vessel_association_test$p.value,
+    region_association_test$p.value
+  ),
+
+  cramers_v = c(
+    vessel_cramers_v,
+    region_cramers_v
+  )
+) |>
+  mutate(
+    across(
+      c(
+        chi_square,
+        simulated_p_value,
+        cramers_v
+      ),
+      ~ round(.x, 4)
+    )
+  )
+
+association_summary
+
+#save
+write_csv(
+  association_summary,
+  here(
+    "results",
+    "tables",
+    "association_summary.csv"
+  )
+)
+```
+
+```{r}
+# ---------------------------------------------------------
+# STEP 3.18: MODEL FEASIBILITY CHECK
+# ---------------------------------------------------------
+
+model_candidate_data <- ship_strikes_clean |>
+  filter(
+    outcome_known,
+    as.character(vessel_category) != "Unknown",
+    as.character(ocean_basin) != "Unknown"
+  ) |>
+  droplevels()
+
+#Check its size
+model_candidate_summary <- model_candidate_data |>
+  summarise(
+    total_records = n(),
+
+    fatal_records = sum(
+      fatal_outcome == 1
+    ),
+
+    non_fatal_records = sum(
+      fatal_outcome == 0
+    ),
+
+    vessel_categories =
+      n_distinct(vessel_category),
+
+    ocean_basins =
+      n_distinct(ocean_basin)
+  )
+
+model_candidate_summary
+
+#inspect category sizes
+model_candidate_data |>
+  count(
+    vessel_category,
+    sort = TRUE
+  )
+model_candidate_data |>
+  count(
+    ocean_basin,
+    sort = TRUE
+  )
+# inspect vessel-by-outcome counts
+model_candidate_data |>
+  count(
+    vessel_category,
+    fatal_label
+  ) |>
+  pivot_wider(
+    names_from = fatal_label,
+    values_from = n,
+    values_fill = 0
+  )
+#Inspect region-by-outcome counts
+model_candidate_data |>
+  count(
+    ocean_basin,
+    fatal_label
+  ) |>
+  pivot_wider(
+    names_from = fatal_label,
+    values_from = n,
+    values_fill = 0
+  )
+#Inspect the combined category structure
+model_cell_counts <- model_candidate_data |>
+  count(
+    vessel_category,
+    ocean_basin,
+    fatal_label
+  ) |>
+  arrange(
+    vessel_category,
+    ocean_basin,
+    fatal_label
+  )
+
+model_cell_counts
+#Calculate events-per-parameter diagnostic
+number_of_parameters <-
+  1 +
+  (
+    nlevels(
+      model_candidate_data$vessel_category
+    ) - 1
+  ) +
+  (
+    nlevels(
+      model_candidate_data$ocean_basin
+    ) - 1
+  )
+
+smaller_outcome_group <- min(
+  sum(
+    model_candidate_data$fatal_outcome == 1
+  ),
+  sum(
+    model_candidate_data$fatal_outcome == 0
+  )
+)
+
+events_per_parameter <-
+  smaller_outcome_group /
+  number_of_parameters
+
+model_feasibility_summary <- tibble(
+  total_records = nrow(model_candidate_data),
+  model_parameters = number_of_parameters,
+  smaller_outcome_group = smaller_outcome_group,
+  events_per_parameter = round(
+    events_per_parameter,
+    2
+  ),
+  empty_vessel_region_cells = sum(
+    table(
+      model_candidate_data$vessel_category,
+      model_candidate_data$ocean_basin
+    ) == 0
+  )
+)
+
+model_feasibility_summary
+
+#Save 
+write_csv(
+  model_feasibility_summary,
+  here(
+    "results",
+    "tables",
+    "model_feasibility_summary.csv"
+  )
+)
+```
+## Combined-model feasibility
+
+A combined binomial logistic-regression model was considered to examine vessel
+category and ocean basin simultaneously.
+
+The candidate dataset contained 121 complete records and required 10 model
+parameters. The smaller outcome group contained 52 records, producing
+approximately 5.2 observations per parameter. There were also 11 empty
+vessel-category by ocean-basin combinations.
+
+Because of the limited events-per-parameter ratio and sparse category
+structure, a combined model was not fitted. Estimated coefficients would be
+at risk of instability and could provide misleading apparent precision.
+
+The separate simulated chi-square tests, confidence intervals and effect-size
+estimates were therefore retained as the more defensible analytical approach.
+
+```{r}
+#3.19 Model decision
+model_decision <- model_feasibility_summary |>
+  mutate(
+    decision = "Combined logistic regression not fitted",
+
+    rationale = paste(
+      "Limited events per parameter and 11 empty vessel-region",
+      "cells indicated a risk of unstable model estimates."
+    )
+  )
+
+model_decision
+
+write_csv(
+  model_decision,
+  here(
+    "results",
+    "tables",
+    "combined_model_decision.csv"
+  )
+)
+```
+
+```{r}
+#Step 3.20 Results summary 
+# Highest documented species frequency
+top_frequency_result <- species_summary |>
+  slice_max(
+    order_by = reported_strikes,
+    n = 1,
+    with_ties = FALSE
+  )
+
+# Highest species fatality estimate among species with ≥5 outcomes
+top_species_fatality_result <- species_fatality_display |>
+  slice_max(
+    order_by = fatality_proportion,
+    n = 1,
+    with_ties = FALSE
+  )
+
+# Highest vessel estimate among categories with ≥5 outcomes
+top_vessel_result <- vessel_outcome_summary |>
+  filter(known_outcomes >= 5) |>
+  slice_max(
+    order_by = fatality_proportion,
+    n = 1,
+    with_ties = FALSE
+  )
+
+# Highest regional estimate among basins with ≥5 outcomes
+top_region_result <- region_outcome_summary |>
+  filter(known_outcomes >= 5) |>
+  slice_max(
+    order_by = fatality_proportion,
+    n = 1,
+    with_ties = FALSE
+  )
+
+#Combine them 
+phase_3_key_results <- tibble(
+  analysis = c(
+    "Reported species frequency",
+    "Species fatality proportion",
+    "Vessel association",
+    "Highest vessel-category estimate",
+    "Regional association",
+    "Highest ocean-basin estimate",
+    "Identification sensitivity",
+    "Combined-model decision"
+  ),
+
+  key_result = c(
+    paste0(
+      top_frequency_result$species_analysis_name,
+      ": ",
+      top_frequency_result$reported_strikes,
+      " documented records"
+    ),
+
+    paste0(
+      top_species_fatality_result$species_analysis_name,
+      ": ",
+      scales::percent(
+        top_species_fatality_result$fatality_proportion,
+        accuracy = 0.1
+      ),
+      " (",
+      top_species_fatality_result$documented_deaths,
+      "/",
+      top_species_fatality_result$known_outcomes,
+      ")"
+    ),
+
+    paste0(
+      "Simulated p = ",
+      format.pval(
+        vessel_association_test$p.value,
+        digits = 3,
+        eps = 0.001
+      ),
+      "; Cramer's V = ",
+      round(vessel_cramers_v, 2)
+    ),
+
+    paste0(
+      top_vessel_result$vessel_category,
+      ": ",
+      scales::percent(
+        top_vessel_result$fatality_proportion,
+        accuracy = 0.1
+      ),
+      " (",
+      top_vessel_result$documented_deaths,
+      "/",
+      top_vessel_result$known_outcomes,
+      ")"
+    ),
+
+    paste0(
+      "Simulated p = ",
+      format.pval(
+        region_association_test$p.value,
+        digits = 3,
+        eps = 0.001
+      ),
+      "; Cramer's V = ",
+      round(region_cramers_v, 2)
+    ),
+
+    paste0(
+      top_region_result$ocean_basin,
+      ": ",
+      scales::percent(
+        top_region_result$fatality_proportion,
+        accuracy = 0.1
+      ),
+      " (",
+      top_region_result$documented_deaths,
+      "/",
+      top_region_result$known_outcomes,
+      ")"
+    ),
+
+    paste0(
+      "Frequency correlation = ",
+      round(frequency_rank_correlation, 3),
+      "; top-ten overlap = ",
+      top_ten_overlap,
+      "/10"
+    ),
+
+    "Full vessel-plus-region logistic model not fitted because of sparse data"
+  )
+)
+
+phase_3_key_results
+
+#save 
+write_csv(
+  phase_3_key_results,
+  here(
+    "results",
+    "tables",
+    "phase_3_key_results.csv"
+  )
+)
+
+```
+## Phase 3 conclusion
+
+The species analysis showed that documented strike burden and fatality
+proportion represented different aspects of apparent vulnerability. Fin and
+humpback whales dominated the reported incident records, although their
+fatality patterns differed among records with known outcomes.
+
+Restricting the analysis to confirmed identifications produced almost
+identical species-frequency rankings, indicating that the principal species
+patterns were not driven by uncertain identifications.
+
+Simulated chi-square tests were used to examine associations between fatality
+outcome, vessel category and ocean basin because several expected cell counts
+were small. Effect sizes were reported using Cramér's V.
+
+A combined logistic-regression model was considered but rejected because the
+complete-case dataset contained a relatively low number of observations per
+parameter and numerous empty vessel-region combinations. The separate
+association analyses were therefore considered more reliable and
+interpretable.

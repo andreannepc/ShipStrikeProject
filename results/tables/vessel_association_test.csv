@@ -1,0 +1,2 @@
+test,statistic,degrees_of_freedom,p_value,simulations
+Chi-square test with simulated p-value,41.242982636580884,NA,9.999000099990002e-5,10000

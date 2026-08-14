@@ -1,0 +1,2 @@
+total_records,model_parameters,smaller_outcome_group,events_per_parameter,empty_vessel_region_cells,decision,rationale
+121,10,52,5.2,11,Combined logistic regression not fitted,Limited events per parameter and 11 empty vessel-region cells indicated a risk of unstable model estimates.

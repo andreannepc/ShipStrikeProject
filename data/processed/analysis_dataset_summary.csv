@@ -1,0 +1,8 @@
+dataset,records,percentage_of_cleaned_data
+Complete cleaned dataset,538,100
+Species frequency,449,83.5
+Species fatality,174,32.3
+Confirmed species,386,71.7
+Vessel outcome,121,22.5
+Region outcome,216,40.1
+Temporal analysis,526,97.8

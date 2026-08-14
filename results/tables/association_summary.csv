@@ -1,0 +1,3 @@
+predictor,usable_records,chi_square,simulated_p_value,cramers_v
+Vessel category,121,41.243,1e-4,0.5838
+Ocean basin,216,37.7579,1e-4,0.4181

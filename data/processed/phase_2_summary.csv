@@ -1,0 +1,12 @@
+measure,value
+Original records,538
+Cleaned records,538
+Duplicate original records,0
+Species-frequency records,449
+Species-fatality records,174
+Confirmed-species records,386
+Known-outcome records,216
+Documented deaths,145
+Vessel-outcome records,121
+Region-outcome records,216
+Records with a usable analysis year,526

@@ -1,0 +1,8 @@
+vessel_category,known_outcomes,documented_deaths,outcome_ratio,fatality_percent,fatality_ci_lower,fatality_ci_upper
+Other or industrial,2,2,2/2,100.0%,0.3423802275066532,1
+Cargo or tanker,21,20,20/21,95.2%,0.7733063992587743,0.9915440121901735
+Passenger or ferry,29,21,21/29,72.4%,0.5428286758313405,0.8530124489791204
+Government or naval,22,15,15/22,68.2%,0.4731859774104276,0.8363940681864375
+Recreational or small craft,23,7,7/23,30.4%,0.15604024453214027,0.508657562687592
+Research or whale-watching,19,4,4/19,21.1%,0.0850767663291625,0.43334278443814156
+Fishing or whaling,5,0,0/5,0.0%,2.7755575615628914e-17,0.43448246478317465

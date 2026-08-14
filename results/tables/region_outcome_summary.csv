@@ -1,0 +1,5 @@
+ocean_basin,known_outcomes,documented_deaths,non_fatal_outcomes,fatality_proportion,fatality_ci_lower,fatality_ci_upper
+Indian Ocean,10,10,0,1,0.7224672001371109,1
+Atlantic Ocean,121,98,23,0.8099173553719008,0.7308962405459443,0.8698657235361973
+Pacific Ocean,84,37,47,0.44047619047619047,0.33922955630167256,0.5469289827953108
+Southern Ocean,1,0,1,0,0,0.7934506856227626

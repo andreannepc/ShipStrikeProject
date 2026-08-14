@@ -1,0 +1,55 @@
+vessel_type,vessel_type_clean,vessel_category,number_of_records
+Not known,Unknown,Unknown,287
+NA,Unknown,Unknown,52
+Naval vessel,Naval vessel,Government or naval,25
+Whale watching vessel,Whale-watching vessel,Research or whale-watching,18
+Ferry,Ferry,Passenger or ferry,13
+Passenger vessel,Passenger vessel,Passenger or ferry,13
+Container ship,Container ship,Cargo or tanker,11
+Whale whatching vessel,Whale-watching vessel,Research or whale-watching,11
+Motor yacht (<25m),Motor yacht (<25m),Recreational or small craft,10
+Motor yacht (unknown size),Motor yacht (unknown size),Recreational or small craft,8
+Motor yacht (>25m),Motor yacht (>25m),Recreational or small craft,7
+General cargo,General cargo,Cargo or tanker,5
+Other,Other,Other or industrial,5
+Fishing vessel,Fishing vessel,Fishing or whaling,4
+Oil Tanker,Oil tanker,Cargo or tanker,4
+Open fishing boat,Open fishing boat,Fishing or whaling,4
+Rigid inflatable/inflatable,Rigid inflatable/inflatable,Recreational or small craft,4
+Submarine,Submarine,Government or naval,4
+"Fast ferry (>25knots, >300grt)","Fast ferry (>25knots, >300grt)",Passenger or ferry,3
+Hydrofoil,Hydrofoil,Passenger or ferry,3
+Sailing vessel,Sailing vessel,Recreational or small craft,3
+Sailing yacht (<25m),Sailing yacht (<25m),Recreational or small craft,3
+Whal watching vessel,Whale-watching vessel,Research or whale-watching,3
+High-speed Ferry,High-speed ferry,Passenger or ferry,2
+Hopper dredge,Hopper dredge,Other or industrial,2
+Motor yacht (unknwon size),Motor yacht (unknown size),Recreational or small craft,2
+Sailing vessel (<25m),Sailing vessel (<25m),Recreational or small craft,2
+Small passenger vessel/cruise ship,Small passenger vessel/cruise ship,Passenger or ferry,2
+U.S. Coast Guard,US Coast Guard vessel,Government or naval,2
+Whale catcher boat,Whale catcher boat,Fishing or whaling,2
+"Container ship (<50,000grt)","Container ship (<50,000grt)",Cargo or tanker,1
+Cruise Ship,Cruise ship,Passenger or ferry,1
+Cruise ship,Cruise ship,Passenger or ferry,1
+Dinghy,Dinghy,Recreational or small craft,1
+Ferry (displacement hull > 300grt),Ferry (displacement hull > 300grt),Passenger or ferry,1
+Fishing vessel (< 300grt),Fishing vessel (<300 GRT),Fishing or whaling,1
+Fishing vessel (<300grt),Fishing vessel (<300 GRT),Fishing or whaling,1
+Freighter,Freighter,Cargo or tanker,1
+Freighter or container,Freighter or container,Cargo or tanker,1
+General Cargo,General cargo,Cargo or tanker,1
+High-speed ferry,High-speed ferry,Passenger or ferry,1
+Large passenger vessel/cruise ship,Large passenger vessel/cruise ship,Passenger or ferry,1
+Motor yacht,Motor yacht,Recreational or small craft,1
+Oil tanker,Oil tanker,Cargo or tanker,1
+Pilot boat,Pilot boat,Other or industrial,1
+Research Vessel,Research vessel,Research or whale-watching,1
+Rigid inlatable/inflatable,Rigid inflatable/inflatable,Recreational or small craft,1
+Sailing yacht,Sailing yacht,Recreational or small craft,1
+Sailing yacht (unknown size),Sailing yacht (unknown size),Recreational or small craft,1
+Sport fishing vessel,Sport fishing vessel,Fishing or whaling,1
+US Coast Guard,US Coast Guard vessel,Government or naval,1
+US Coast Guard vessel,US Coast Guard vessel,Government or naval,1
+US Coast guard,US Coast Guard vessel,Government or naval,1
+Unknown,Unknown,Unknown,1

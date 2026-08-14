@@ -1,0 +1,11 @@
+frequency_rank,species_analysis_name,reported_strikes,confirmed_identifications,known_outcomes,documented_deaths,outcome_coverage,fatality_proportion
+1,Balaenoptera physalus,126,108,62,55,0.49206349206349204,0.8870967741935484
+2,Megaptera novaeangliae,120,97,38,15,0.31666666666666665,0.39473684210526316
+3,Eubalaena glacialis,53,51,10,7,0.18867924528301888,0.7
+4,Physeter macrocephalus,29,27,12,8,0.41379310344827586,0.6666666666666666
+5,Eubalaena australis,26,23,12,9,0.46153846153846156,0.75
+6,Balaenoptera acutorostrata,18,13,7,4,0.3888888888888889,0.5714285714285714
+7,Eschrichtius robustus,13,11,7,4,0.5384615384615384,0.5714285714285714
+8,Balaenoptera edeni,10,9,2,2,0.2,1
+9,Balaenoptera musculus,10,10,7,7,0.7,1
+10,Orcinus orca,10,9,5,3,0.5,0.6

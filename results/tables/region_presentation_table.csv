@@ -1,0 +1,5 @@
+ocean_basin,known_outcomes,documented_deaths,non_fatal_outcomes,outcome_ratio,fatality_percent,confidence_interval
+Indian Ocean,10,10,0,10/10,100.0%,72.2%–100.0%
+Atlantic Ocean,121,98,23,98/121,81.0%,73.1%–87.0%
+Pacific Ocean,84,37,47,37/84,44.0%,33.9%–54.7%
+Southern Ocean,1,0,1,0/1,0.0%,0.0%–79.3%

@@ -1,0 +1,9 @@
+analysis,key_result
+Reported species frequency,Balaenoptera physalus: 126 documented records
+Species fatality proportion,Balaenoptera musculus: 100.0% (7/7)
+Vessel association,Simulated p = <0.001; Cramer's V = 0.58
+Highest vessel-category estimate,Cargo or tanker: 95.2% (20/21)
+Regional association,Simulated p = <0.001; Cramer's V = 0.42
+Highest ocean-basin estimate,Indian Ocean: 100.0% (10/10)
+Identification sensitivity,Frequency correlation = 0.986; top-ten overlap = 10/10
+Combined-model decision,Full vessel-plus-region logistic model not fitted because of sparse data
